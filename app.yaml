@@ -5,5 +5,5 @@ env: standard
 instance_class: F1
 
 env_variables:
-  VITE_SUPABASE_URL: "https://0ec90b57d6e95fcbda19832f.supabase.co"
-  VITE_SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJib2x0IiwicmVmIjoiMGVjOTBiNTdkNmU5NWZjYmRhMTk4MzJmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg4ODE1NzQsImV4cCI6MTc1ODg4MTU3NH0.9I8-U0x86Ak8t2DGaIk0HfvTSLsAyzdnz-Nw00mMkKw"
+  VITE_SUPABASE_URL: "https://ytyyebmntkhkujpqxmra.supabase.co"
+  VITE_SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inl0eXllYm1udGtoa3VqcHF4bXJhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA4Nzk1MDIsImV4cCI6MjA3NjQ1NTUwMn0.gRQtGGh2zChrw96RUSY6o6P-Vier0VaawfN2MpX9uqE"
