@@ -19,7 +19,9 @@ steps:
     args: ['push', 'gcr.io/$PROJECT_ID/hellskitchenwine:latest']
 
   - name: 'gcr.io/cloud-builders/gcloud'
+    entrypoint: 'bash'
     args:
+      - '-c'
       - 'run'
       - 'deploy'
       - 'hellskitchenwine'
