@@ -1,4 +1,12 @@
 steps:
+  - name: 'gcr.io/cloud-builders/gcloud'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "URL=${_VITE_SUPABASE_URL}"
+        echo "KEY_LEN=${#_VITE_SUPABASE_ANON_KEY}"
+
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
@@ -19,9 +27,8 @@ steps:
     args: ['push', 'gcr.io/$PROJECT_ID/hellskitchenwine:latest']
 
   - name: 'gcr.io/cloud-builders/gcloud'
-    entrypoint: 'bash'
     args:
-      - '-c'
+      - 'run'
       - 'deploy'
       - 'hellskitchenwine'
       - '--image'
