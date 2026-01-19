@@ -22,7 +22,6 @@ steps:
     entrypoint: 'bash'
     args:
       - '-c'
-      - 'run'
       - 'deploy'
       - 'hellskitchenwine'
       - '--image'
