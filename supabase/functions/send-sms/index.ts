@@ -184,21 +184,31 @@
 //   }
 // });
 
-/// <reference lib="deno.ns" />
+/// /// <reference lib="deno.ns" />
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-const ALLOWED_ORIGIN = "https://hellskitchenwine-571619613032.us-central1.run.app";
-// If you also test locally, you can temporarily use "*" or implement allowlist logic.
+// ✅ Set your allowed origins here
+const ALLOWED_ORIGINS = new Set<string>([
+  "https://hellskitchenwine-571619613032.us-central1.run.app",
+  "http://localhost:5173",
+  "http://localhost:3000",
+]);
 
-const corsHeaders: Record<string, string> = {
-  "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  // Optional:
-  "Access-Control-Max-Age": "86400"
-};
+function getCorsHeaders(req: Request): Record<string, string> {
+  const origin = req.headers.get("origin") ?? "";
+  const allowOrigin = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+
+  return {
+    "Access-Control-Allow-Origin": allowOrigin,
+    "Vary": "Origin",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    // ✅ This is the standard Supabase header allowlist
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Max-Age": "86400",
+  };
+}
 
 interface SendSmsRequest {
   customerIds?: string[];
@@ -208,25 +218,42 @@ interface SendSmsRequest {
 }
 
 serve(async (req: Request) => {
-  // ✅ CORS preflight
+  const corsHeaders = getCorsHeaders(req);
+
+  // ✅ Always handle preflight first
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  // Only allow POST for the actual request
+  // Only allow POST for actual call
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ success: false, error: "Method not allowed" }), {
       status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" }
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
   try {
+    // Optional: if origin isn't allowed, return a clean error (still with CORS headers)
+    const origin = req.headers.get("origin") ?? "";
+    if (!ALLOWED_ORIGINS.has(origin)) {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: `Origin not allowed: ${origin}`,
+        }),
+        {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        }
+      );
+    }
+
+    // Supabase env
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-
     if (!supabaseUrl || !serviceRoleKey) {
-      throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in function env");
+      throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in Edge Function env");
     }
 
     const supabaseClient = createClient(supabaseUrl, serviceRoleKey);
@@ -254,6 +281,7 @@ serve(async (req: Request) => {
       throw new Error("Twilio credentials not configured");
     }
 
+    // Parse request body
     const body: SendSmsRequest = await req.json();
     const { customerIds, phoneNumbers, messageBody, pointsThreshold } = body;
 
@@ -261,7 +289,7 @@ serve(async (req: Request) => {
       throw new Error("Message body is required");
     }
 
-    // Get customers to message
+    // Query customers based on criteria
     let customers: any[] = [];
 
     if (customerIds?.length) {
@@ -297,7 +325,8 @@ serve(async (req: Request) => {
 
     const results: Array<{ phone: string; status: string; error?: string }> = [];
 
-    const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Messages.json`;
+    const twilioUrl =
+      `https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Messages.json`;
     const authHeader = `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`;
 
     for (const customer of customers) {
@@ -309,7 +338,7 @@ serve(async (req: Request) => {
         customer_id: customer.id,
         phone: customer.phone,
         message_body: personalizedMessage,
-        status: "pending"
+        status: "pending",
       };
 
       try {
@@ -322,9 +351,9 @@ serve(async (req: Request) => {
           method: "POST",
           headers: {
             "Authorization": authHeader,
-            "Content-Type": "application/x-www-form-urlencoded"
+            "Content-Type": "application/x-www-form-urlencoded",
           },
-          body: formData.toString()
+          body: formData.toString(),
         });
 
         if (resp.ok) {
@@ -346,24 +375,28 @@ serve(async (req: Request) => {
         results.push({ phone: customer.phone, status: "failed", error: msg });
       }
 
-      // Save message record (don’t block the response if this fails)
+      // Save message record (don’t crash if insert fails)
       await supabaseClient.from("messages").insert(messageRecord);
 
-      // Rate limit
+      // Rate limit: 100ms between messages
       await new Promise((r) => setTimeout(r, 100));
     }
 
     return new Response(
-      JSON.stringify({ success: true, totalCustomers: customers.length, results }),
+      JSON.stringify({
+        success: true,
+        totalCustomers: customers.length,
+        results,
+      }),
       {
         status: 200,
-        headers: { ...corsHeaders, "Content-Type": "application/json" }
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );
   } catch (err: any) {
     return new Response(JSON.stringify({ success: false, error: err?.message ?? String(err) }), {
       status: 400,
-      headers: { ...corsHeaders, "Content-Type": "application/json" }
+      headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
     });
   }
 });
