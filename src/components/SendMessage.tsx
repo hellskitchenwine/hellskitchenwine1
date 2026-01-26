@@ -73,7 +73,7 @@ export function SendMessage({ selectedCustomerIds, onSendComplete }: SendMessage
     }
 
     const compliance = checkNYSMSCompliance();
-    if (compliance.allowed) {
+    if (!compliance.allowed) {
       setResult({ success: false, message: compliance.reason || 'Cannot send messages at this time' });
       return;
     }
