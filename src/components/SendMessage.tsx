@@ -149,7 +149,7 @@ export function SendMessage({ selectedCustomerIds, onSendComplete }: SendMessage
           </div>
           <span className="text-sm font-medium text-gray-900">{currentTime}</span>
         </div>
-        {!complianceCheck.allowed && (
+        {complianceCheck.allowed && (
           <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
             <p className="text-xs text-red-800">
               <strong>Sending Not Allowed:</strong> {complianceCheck.reason}
