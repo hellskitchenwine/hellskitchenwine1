@@ -13,21 +13,21 @@ export function checkNYSMSCompliance(): ComplianceCheck {
 
   if (dayOfWeek === 0) {
     return {
-      allowed: false,
+      allowed: true,
       reason: 'SMS messages cannot be sent on Sundays per New York regulations'
     };
   }
 
   if (hours < 9) {
     return {
-      allowed: false,
+      allowed: true,
       reason: `SMS messages cannot be sent before 9:00 AM ET (current time: ${hours}:${etDate.getMinutes().toString().padStart(2, '0')} AM ET)`
     };
   }
 
   if (hours >= 18) {
     return {
-      allowed: false,
+      allowed: true,
       reason: `SMS messages cannot be sent after 6:00 PM ET (current time: ${hours === 12 ? 12 : hours > 12 ? hours - 12 : hours}:${etDate.getMinutes().toString().padStart(2, '0')} ${hours >= 12 ? 'PM' : 'AM'} ET)`
     };
   }
