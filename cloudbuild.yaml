@@ -12,6 +12,7 @@ steps:
       - 'VITE_SUPABASE_ANON_KEY=${_VITE_SUPABASE_ANON_KEY}'
       - '.'
 
+
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/hellskitchenwine:$BUILD_ID']
 
@@ -20,6 +21,10 @@ steps:
 
   - name: 'gcr.io/cloud-builders/gcloud'
     args:
+      - 'c'
+      - |
+        echo "DEBUG_SUPABASE_URL=${_VITE_SUPABASE_URL}"
+        echo "DEBUG_SUPABASE_KEY_LENGTH=${_VITE_SUPABASE_ANON_KEY}"
       - 'run'
       - 'deploy'
       - 'hellskitchenwine'
@@ -32,6 +37,7 @@ steps:
       - '--allow-unauthenticated'
       - '--set-env-vars'
       - 'VITE_SUPABASE_URL=${_VITE_SUPABASE_URL},VITE_SUPABASE_ANON_KEY=${_VITE_SUPABASE_ANON_KEY}'
+
 
 images:
   - 'gcr.io/$PROJECT_ID/hellskitchenwine:$BUILD_ID'
