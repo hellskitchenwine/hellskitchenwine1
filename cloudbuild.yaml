@@ -12,7 +12,6 @@ steps:
       - 'VITE_SUPABASE_ANON_KEY=${_VITE_SUPABASE_ANON_KEY}'
       - '.'
 
-
   - name: 'gcr.io/cloud-builders/docker'
     args: ['push', 'gcr.io/$PROJECT_ID/hellskitchenwine:$BUILD_ID']
 
@@ -20,24 +19,18 @@ steps:
     args: ['push', 'gcr.io/$PROJECT_ID/hellskitchenwine:latest']
 
   - name: 'gcr.io/cloud-builders/gcloud'
+    entrypoint: 'bash'
     args:
-      - 'c'
+      - '-c'
       - |
         echo "DEBUG_SUPABASE_URL=${_VITE_SUPABASE_URL}"
-        echo "DEBUG_SUPABASE_KEY_LENGTH=${_VITE_SUPABASE_ANON_KEY}"
-      - 'run'
-      - 'deploy'
-      - 'hellskitchenwine'
-      - '--image'
-      - 'gcr.io/$PROJECT_ID/hellskitchenwine:$BUILD_ID'
-      - '--region'
-      - 'us-central1'
-      - '--platform'
-      - 'managed'
-      - '--allow-unauthenticated'
-      - '--set-env-vars'
-      - 'VITE_SUPABASE_URL=${_VITE_SUPABASE_URL},VITE_SUPABASE_ANON_KEY=${_VITE_SUPABASE_ANON_KEY}'
+        echo "DEBUG_SUPABASE_KEY_LENGTH=${#_VITE_SUPABASE_ANON_KEY}"
 
+        gcloud run deploy hellskitchenwine \
+          --image "gcr.io/$PROJECT_ID/hellskitchenwine:$BUILD_ID" \
+          --region "us-central1" \
+          --platform "managed" \
+          --allow-unauthenticated
 
 images:
   - 'gcr.io/$PROJECT_ID/hellskitchenwine:$BUILD_ID'
