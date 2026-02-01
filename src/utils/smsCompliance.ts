@@ -21,7 +21,7 @@ export function checkNYSMSCompliance(): ComplianceCheck {
   if (hours < 9) {
     return {
       allowed: false,
-      reason: `SMS messages cannot be sent before 9:00 AM ET (current time: ${hours}:${etDate.getMinutes().toString().padStart(2, '0')} AM ET)`
+      reason: `SMS messages canot be sent before 9:00 AM ET (current time: ${hours}:${etDate.getMinutes().toString().padStart(2, '0')} AM ET)`
     };
   }
 
