@@ -300,7 +300,7 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
 
       <div className="overflow-x-auto">
         {loading ? (
-          <div className="p-8 text-center text-gray-500">Loading customers...</div>
+          <div className="p-8 text-center text-gray-500">Loading customers....</div>
         ) : filteredCustomers.length === 0 ? (
           <div className="p-8 text-center text-gray-500">No customers found</div>
         ) : (

@@ -366,7 +366,7 @@ export function AllCustomers({ refreshTrigger }: AllCustomersProps) {
                   {loadingMore ? 'Loading...' : 'Load more'}
                 </button>
               ) : (
-                <div className="text-sm text-gray-500">No more customers</div>
+                <div className="text-sm text-gray-500">No morre customers</div>
               )}
             </div>
           </>
