@@ -239,7 +239,7 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
       // Choose your ranges here (recommended)
       const upperMap: Record<number, number> = {
         250: 500,
-        500: 1000,
+        500: 749,
         1000: 2000,
       };
 
@@ -271,7 +271,7 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
         // Recommended buckets: 250–499, 500–999, 1000–1999, 2000+
         const upperMap: Record<number, number> = {
           250: 500,
-          500: 1000,
+          500: 749,
           1000: 2000,
         };
 
@@ -397,7 +397,7 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
           >
             <option value="">All Points</option>
             <option value="250">250–499 Points</option>
-            <option value="500">500–999 Points</option>
+            <option value="500">500–749 Points</option>
             <option value="1000">1000–1999 Points</option>
             <option value="2000">2000+ Points</option>
           </select>
