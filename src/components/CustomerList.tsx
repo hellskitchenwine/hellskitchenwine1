@@ -180,51 +180,111 @@
 //     </div>
 //   );
 // }
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Users, Search, Phone, Star } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Customer } from '../types/database';
 
+type Segment = {
+  searchQuery: string;
+  minPoints?: number;
+  maxPoints?: number;
+  optedOut?: boolean; // we always use false here, but keeping it for flexibility
+};
+
+type SelectionPayload =
+  | { mode: 'manual'; selectedIds: string[]; segment: null; totalCount: number }
+  | { mode: 'segment'; selectedIds: []; segment: Segment; totalCount: number };
+
 interface CustomerListProps {
-  onSelectionChange: (selectedIds: string[]) => void;
+  onSelectionChange: (payload: SelectionPayload) => void;
   refreshTrigger: number;
 }
 
 export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerListProps) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [pointsFilter, setPointsFilter] = useState('500');
+
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectMode, setSelectMode] = useState<'manual' | 'segment'>('manual');
+
+  const [totalCount, setTotalCount] = useState<number>(0);
 
   useEffect(() => {
     loadCustomers();
-  }, [refreshTrigger, pointsFilter]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTrigger, pointsFilter, searchQuery]);
+
+  // Clear selection when filters/search change
+  useEffect(() => {
+    setSelectMode('manual');
+    setSelectedIds(new Set());
+    onSelectionChange({ mode: 'manual', selectedIds: [], segment: null, totalCount: 0 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pointsFilter, searchQuery, refreshTrigger]);
+
+  const buildSegment = (): Segment => {
+    const segment: Segment = {
+      searchQuery: searchQuery.trim(),
+      optedOut: false,
+    };
+
+    if (pointsFilter) {
+      const min = parseInt(pointsFilter, 10);
+      segment.minPoints = min;
+
+      // Choose your ranges here (recommended)
+      const upperMap: Record<number, number> = {
+        250: 500,
+        500: 1000,
+        1000: 2000,
+      };
+
+      const maxExclusive = upperMap[min];
+      if (maxExclusive) segment.maxPoints = maxExclusive;
+    }
+
+    return segment;
+  };
 
   const loadCustomers = async () => {
     setLoading(true);
     try {
       let query = supabase
         .from('customers')
-        .select('*')
+        .select('*', { count: 'exact' })
         .eq('opted_out', false)
         .order('points', { ascending: false });
+
+      const q = searchQuery.trim();
+      if (q) {
+        query = query.or(`first_name.ilike.%${q}%,phone.ilike.%${q}%`);
+      }
 
       if (pointsFilter) {
         const min = parseInt(pointsFilter, 10);
         query = query.gte('points', min);
 
-        // Add upper bounds so "500+" becomes 500–999, etc.
-        if (min === 250) query = query.lt('points', 500);
-        else if (min === 500) query = query.lt('points', 749);
-        else if (min === 1000) query = query.lt('points', 1249);
-        // min === 2000 -> no upper bound
+        // Recommended buckets: 250–499, 500–999, 1000–1999, 2000+
+        const upperMap: Record<number, number> = {
+          250: 500,
+          500: 1000,
+          1000: 2000,
+        };
+
+        const maxExclusive = upperMap[min];
+        if (maxExclusive) query = query.lt('points', maxExclusive);
       }
 
-      const { data, error } = await query;
+      const { data, error, count } = await query;
 
       if (error) throw error;
+
       setCustomers(data || []);
+      setTotalCount(typeof count === 'number' ? count : 0);
     } catch (error) {
       console.error('Error loading customers:', error);
     } finally {
@@ -232,32 +292,77 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
     }
   };
 
-  const filteredCustomers = customers.filter((customer) =>
-    customer.first_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    customer.phone.includes(searchQuery)
-  );
+  // client-side filter is now redundant because we already filter on server,
+  // but keeping it safe in case you want instant UI filtering while typing.
+  const filteredCustomers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return customers;
+    return customers.filter(
+      (c) =>
+        c.first_name.toLowerCase().includes(q) ||
+        c.phone.includes(searchQuery)
+    );
+  }, [customers, searchQuery]);
 
   const toggleSelection = (id: string) => {
-    const newSelected = new Set(selectedIds);
-    if (newSelected.has(id)) {
-      newSelected.delete(id);
-    } else {
-      newSelected.add(id);
+    // switching from segment selection to manual selection
+    if (selectMode === 'segment') {
+      setSelectMode('manual');
+      setSelectedIds(new Set([id]));
+      onSelectionChange({
+        mode: 'manual',
+        selectedIds: [id],
+        segment: null,
+        totalCount,
+      });
+      return;
     }
+
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(id)) newSelected.delete(id);
+    else newSelected.add(id);
+
     setSelectedIds(newSelected);
-    onSelectionChange(Array.from(newSelected));
+    onSelectionChange({
+      mode: 'manual',
+      selectedIds: Array.from(newSelected),
+      segment: null,
+      totalCount,
+    });
   };
 
   const toggleSelectAll = () => {
-    if (selectedIds.size === filteredCustomers.length) {
+    // If currently segment-selected, turn it off
+    if (selectMode === 'segment') {
+      setSelectMode('manual');
       setSelectedIds(new Set());
-      onSelectionChange([]);
-    } else {
-      const allIds = new Set(filteredCustomers.map((c) => c.id));
-      setSelectedIds(allIds);
-      onSelectionChange(Array.from(allIds));
+      onSelectionChange({ mode: 'manual', selectedIds: [], segment: null, totalCount });
+      return;
     }
+
+    // Turn on segment mode = ALL matching in DB
+    setSelectMode('segment');
+    setSelectedIds(new Set()); // clear manual IDs
+    onSelectionChange({
+      mode: 'segment',
+      selectedIds: [],
+      segment: buildSegment(),
+      totalCount,
+    });
   };
+
+  const headerSelectedText = useMemo(() => {
+    if (selectMode === 'segment') {
+      return totalCount > 0 ? `${totalCount} selected (all matching)` : '';
+    }
+    return selectedIds.size > 0 ? `${selectedIds.size} selected` : '';
+  }, [selectMode, selectedIds.size, totalCount]);
+
+  const selectAllChecked =
+    (selectMode === 'segment' && totalCount > 0) ||
+    (selectMode === 'manual' &&
+      selectedIds.size === filteredCustomers.length &&
+      filteredCustomers.length > 0);
 
   return (
     <div className="bg-white rounded-lg shadow">
@@ -267,8 +372,9 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
             <Users className="w-6 h-6 text-blue-600" />
             <h2 className="text-xl font-semibold">Customers</h2>
           </div>
+
           <div className="text-sm text-gray-600">
-            {selectedIds.size > 0 && `${selectedIds.size} selected`}
+            {headerSelectedText}
           </div>
         </div>
 
@@ -290,11 +396,15 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="">All Points</option>
-            <option value="250">250+ Points</option>
-            <option value="500">500+ Points</option>
-            <option value="1000">1000+ Points</option>
+            <option value="250">250–499 Points</option>
+            <option value="500">500–999 Points</option>
+            <option value="1000">1000–1999 Points</option>
             <option value="2000">2000+ Points</option>
           </select>
+        </div>
+
+        <div className="mt-3 text-xs text-gray-500">
+          Showing {filteredCustomers.length} rows (database matches: {totalCount})
         </div>
       </div>
 
@@ -310,9 +420,10 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
                 <th className="px-6 py-3 text-left">
                   <input
                     type="checkbox"
-                    checked={selectedIds.size === filteredCustomers.length && filteredCustomers.length > 0}
+                    checked={selectAllChecked}
                     onChange={toggleSelectAll}
                     className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    title="Select all matching customers (in the database)"
                   />
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -331,22 +442,22 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
                 <tr
                   key={customer.id}
                   className={`hover:bg-gray-50 cursor-pointer ${
-                    selectedIds.has(customer.id) ? 'bg-blue-50' : ''
+                    selectMode === 'manual' && selectedIds.has(customer.id) ? 'bg-blue-50' : ''
                   }`}
                   onClick={() => toggleSelection(customer.id)}
                 >
                   <td className="px-6 py-4">
                     <input
                       type="checkbox"
-                      checked={selectedIds.has(customer.id)}
+                      checked={selectMode === 'manual' && selectedIds.has(customer.id)}
                       onChange={() => toggleSelection(customer.id)}
                       className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                      disabled={selectMode === 'segment'}
+                      title={selectMode === 'segment' ? 'All matching customers are selected' : ''}
                     />
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">
-                      {customer.first_name}
-                    </div>
+                    <div className="text-sm font-medium text-gray-900">{customer.first_name}</div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center gap-2 text-sm text-gray-700">
