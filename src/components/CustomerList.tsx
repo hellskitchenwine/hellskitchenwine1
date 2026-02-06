@@ -190,14 +190,36 @@ interface CustomerListProps {
   refreshTrigger: number;
 }
 
-type PointsRangeKey = '' | '250_299' | '500_749' | '300_499' | '2000_plus';
+type PointsRangeKey =
+  | ''
+  | '250_274'
+  | '275_299'
+  | '300_324'
+  | '325_349'
+  | '350_374'
+  | '375_399'
+  | '400_424'
+  | '425_449'
+  | '450_474'
+  | '475_499';
 
-const POINTS_RANGES: Record<Exclude<PointsRangeKey, ''>, { min: number; max?: number; label: string }> = {
-  '250_299': { min: 250, max: 299, label: '250–299 Points' },
-  '500_749': { min: 500, max: 749, label: '500–749 Points' },
-  '300_499': { min: 300, max: 499, label: '300–499 Points' },
-  '2000_plus': { min: 2000, label: '2000+ Points' },
+
+const POINTS_RANGES: Record<
+  Exclude<PointsRangeKey, ''>,
+  { min: number; max: number; label: string }
+> = {
+  '250_274': { min: 250, max: 274, label: '250–274' },
+  '275_299': { min: 275, max: 299, label: '275–299' },
+  '300_324': { min: 300, max: 324, label: '300–324' },
+  '325_349': { min: 325, max: 349, label: '325–349' },
+  '350_374': { min: 350, max: 374, label: '350–374' },
+  '375_399': { min: 375, max: 399, label: '375–399' },
+  '400_424': { min: 400, max: 424, label: '400–424' },
+  '425_449': { min: 425, max: 449, label: '425–449' },
+  '450_474': { min: 450, max: 474, label: '450–474' },
+  '475_499': { min: 475, max: 499, label: '475–499' },
 };
+
 
 const PAGE_SIZE = 1000;
 
@@ -206,7 +228,7 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
   const [loading, setLoading] = useState(true);
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [pointsFilter, setPointsFilter] = useState<PointsRangeKey>('500_749');
+  const [pointsFilter, setPointsFilter] = useState<PointsRangeKey>('250_274');
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -402,10 +424,16 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="">All Points</option>
-            <option value="250_299">250–299 Points</option>
-            <option value="500_749">500–749 Points</option>
-            <option value="300_499">300–499 Points</option>
-            <option value="2000_plus">2000+ Point</option>
+            <option value="250_274">250–274 Points</option>
+            <option value="275_299">275–299 Points</option>
+            <option value="300_324">300–324 Points</option>
+            <option value="325_349">325–349 Points</option>
+            <option value="350_374">350–374 Points</option>
+            <option value="375_399">375–399 Points</option>
+            <option value="400_424">400–424 Points</option>
+            <option value="425_449">425–449 Points</option>
+            <option value="450_474">450–474 Points</option>
+            <option value="475_499">475–499 Points</option>
           </select>
         </div>
 
@@ -489,4 +517,4 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
     </div>
   );
 }
-//nothing here now update customer lsit
+//nothing here now update customer lsitx  
