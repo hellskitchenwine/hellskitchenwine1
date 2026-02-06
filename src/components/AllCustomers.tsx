@@ -167,45 +167,55 @@ export function AllCustomers({ refreshTrigger }: AllCustomersProps) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+
   const [searchQuery, setSearchQuery] = useState('');
+
+  const [statusfilter, setStatusFilter] = useState<'all' | 'active' | 'opted_out'>('all');
+  const [recentlyRedeemedfilter, setRecentlyRedeeemedFilter] = useState<
+    'all' | 'recently_redeemed' | 'not_redeemed'
+  >('all');
+
   const [page, setPage] = useState(0);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [hasMore, setHasMore] = useState(true);
 
-  // When refreshTrigger changes, reset everything
+  // Reset when refreshTrigger changes
   useEffect(() => {
     setCustomers([]);
     setPage(0);
     setHasMore(true);
   }, [refreshTrigger]);
 
-  // When search changes, reset paging
+  // Reset immediately when dropdown filters change
+  useEffect(() => {
+    setCustomers([]);
+    setPage(0);
+    setHasMore(true);
+  }, [statusfilter, recentlyRedeemedfilter]);
+
+  // Reset with debounce when search changes
   useEffect(() => {
     const t = setTimeout(() => {
       setCustomers([]);
       setPage(0);
       setHasMore(true);
-    }, 300); // small debounce for typing
+    }, 300);
     return () => clearTimeout(t);
   }, [searchQuery]);
 
   useEffect(() => {
     loadCustomers(page === 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, refreshTrigger, searchQuery]);
+  }, [page, refreshTrigger, searchQuery, statusfilter, recentlyRedeemedfilter]);
 
   const loadCustomers = async (isFirstPage: boolean) => {
     try {
-      if (isFirstPage) {
-        setLoading(true);
-      } else {
-        setLoadingMore(true);
-      }
+      if (isFirstPage) setLoading(true);
+      else setLoadingMore(true);
 
       const from = page * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
 
-      // Base query
       let query = supabase
         .from('customers')
         .select('*', { count: 'exact' })
@@ -215,26 +225,34 @@ export function AllCustomers({ refreshTrigger }: AllCustomersProps) {
       // Server-side search (name or phone)
       const q = searchQuery.trim();
       if (q) {
-        // If you want partial phone matching even without +, this still works
         query = query.or(`first_name.ilike.%${q}%,phone.ilike.%${q}%`);
+      }
+
+      // Status filter
+      if (statusfilter === 'active') {
+        query = query.eq('opted_out', false);
+      } else if (statusfilter === 'opted_out') {
+        query = query.eq('opted_out', true);
+      }
+
+      // Recently redeemed filter
+      if (recentlyRedeemedfilter === 'recently_redeemed') {
+        query = query.eq('recently_redeemed', true);
+      } else if (recentlyRedeemedfilter === 'not_redeemed') {
+        query = query.eq('recently_redeemed', false);
       }
 
       const { data, error, count } = await query;
 
       if (error) throw error;
 
-      if (typeof count === 'number') {
-        setTotalCount(count);
-      }
+      if (typeof count === 'number') setTotalCount(count);
 
       const pageData = data || [];
-
       setCustomers((prev) => (isFirstPage ? pageData : [...prev, ...pageData]));
-
-      // If we got fewer than PAGE_SIZE, there are no more rows
       setHasMore(pageData.length === PAGE_SIZE);
-    } catch (error) {
-      console.error('Error loading customers:', error);
+    } catch (err) {
+      console.error('Error loading customers:', err);
     } finally {
       setLoading(false);
       setLoadingMore(false);
@@ -262,15 +280,37 @@ export function AllCustomers({ refreshTrigger }: AllCustomersProps) {
           <div className="text-sm text-gray-600">{shownCountText}</div>
         </div>
 
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-          <input
-            type="text"
-            placeholder="Search by name or phone..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          />
+        <div className="flex gap-3">
+          <div className="flex-1 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search by name or phone..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+
+          <select
+            value={statusfilter}
+            onChange={(e) => setStatusFilter(e.target.value as any)}
+            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="all">All Status</option>
+            <option value="active">Active</option>
+            <option value="opted_out">Opted Out</option>
+          </select>
+
+          <select
+            value={recentlyRedeemedfilter}
+            onChange={(e) => setRecentlyRedeeemedFilter(e.target.value as any)}
+            className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          >
+            <option value="all">All Redemption</option>
+            <option value="recently_redeemed">Recently Redeemed</option>
+            <option value="not_redeemed">Not Redeemed</option>
+          </select>
         </div>
       </div>
 
@@ -309,28 +349,30 @@ export function AllCustomers({ refreshTrigger }: AllCustomersProps) {
                 {customers.map((customer) => (
                   <tr key={customer.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm font-medium text-gray-900">
-                        {customer.first_name}
-                      </div>
+                      <div className="text-sm font-medium text-gray-900">{customer.first_name}</div>
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2 text-sm text-gray-700">
                         <Phone className="w-4 h-4 text-gray-400" />
                         {customer.phone}
                       </div>
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-1 text-sm font-medium text-gray-900">
                         <Star className="w-4 h-4 text-yellow-500 fill-yellow-500" />
                         {customer.points}
                       </div>
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2 text-sm text-gray-600">
                         <Calendar className="w-4 h-4 text-gray-400" />
                         {formatDate(customer.updated_at)}
                       </div>
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap">
                       {customer.opted_out ? (
                         <span className="px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800">
@@ -342,6 +384,7 @@ export function AllCustomers({ refreshTrigger }: AllCustomersProps) {
                         </span>
                       )}
                     </td>
+
                     <td className="px-6 py-4 whitespace-nowrap">
                       {customer.recently_redeemed ? (
                         <span className="px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800">
@@ -366,7 +409,7 @@ export function AllCustomers({ refreshTrigger }: AllCustomersProps) {
                   {loadingMore ? 'Loading...' : 'Load more'}
                 </button>
               ) : (
-                <div className="text-sm text-gray-500">No morre customers</div>
+                <div className="text-sm text-gray-500">No more customers</div>
               )}
             </div>
           </>
