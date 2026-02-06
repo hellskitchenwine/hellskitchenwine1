@@ -489,3 +489,4 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
     </div>
   );
 }
+//nothing here
