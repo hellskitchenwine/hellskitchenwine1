@@ -398,7 +398,7 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
             <option value="">All Points</option>
             <option value="250">250–499 Points</option>
             <option value="500">500–749 Points</option>
-            <option value="1000">1000–1999 Points</option>
+            <option value="1000">1000–1249 Points</option>
             <option value="2000">2000+ Points</option>
           </select>
         </div>
