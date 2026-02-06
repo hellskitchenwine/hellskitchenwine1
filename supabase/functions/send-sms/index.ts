@@ -347,6 +347,7 @@ serve(async (req: Request) => {
       acc[row.key as string] = row.value as string;
       return acc;
     }, {} as Record<string, string>);
+    //referrence here to avoid truncation
 
     const twilioAccountSid = settingsMap.twilio_account_sid;
     const twilioAuthToken = settingsMap.twilio_auth_token;
