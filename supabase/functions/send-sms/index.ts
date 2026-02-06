@@ -1,12 +1,28 @@
+// /// /// <reference lib="deno.ns" />
 // import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 // import { createClient } from "npm:@supabase/supabase-js@2";
+// import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
+// // ✅ Set your allowed origins here
+// const ALLOWED_ORIGINS = new Set<string>([
+//   "https://hellskitchenwine-571619613032.us-central1.run.app",
+//   "http://localhost:5173",
+//   "http://localhost:3000",
+// ]);
 
-// const corsHeaders = {
-//   "Access-Control-Allow-Origin": "*",
-//   "Access-Control-Allow-Methods": "POST, OPTIONS",
-//   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
-// };
+// function getCorsHeaders(req: Request): Record<string, string> {
+//   const origin = req.headers.get("origin") ?? "";
+//   const allowOrigin = ALLOWED_ORIGINS.has(origin) ? origin : "null";
+
+//   return {
+//     "Access-Control-Allow-Origin": allowOrigin,
+//     "Vary": "Origin",
+//     "Access-Control-Allow-Methods": "POST, OPTIONS",
+//     // ✅ This is the standard Supabase header allowlist
+//     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+//     "Access-Control-Max-Age": "86400",
+//   };
+// }
 
 // interface SendSmsRequest {
 //   customerIds?: string[];
@@ -15,21 +31,48 @@
 //   pointsThreshold?: number;
 // }
 
-// Deno.serve(async (req: Request) => {
+// serve(async (req: Request) => {
+//   const corsHeaders = getCorsHeaders(req);
+
+//   // ✅ Always handle preflight first
 //   if (req.method === "OPTIONS") {
-//     return new Response(null, {
-//       status: 200,
-//       headers: corsHeaders,
+//     return new Response(null, { status: 204, headers: corsHeaders });
+//   }
+
+//   // Only allow POST for actual call
+//   if (req.method !== "POST") {
+//     return new Response(JSON.stringify({ success: false, error: "Method not allowed" }), {
+//       status: 405,
+//       headers: { ...corsHeaders, "Content-Type": "application/json" },
 //     });
 //   }
 
 //   try {
-//     const supabaseClient = createClient(
-//       Deno.env.get("SUPABASE_URL") ?? "",
-//       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
-//     );
+//     // Optional: if origin isn't allowed, return a clean error (still with CORS headers)
+//     const origin = req.headers.get("origin") ?? "";
+//     if (!ALLOWED_ORIGINS.has(origin)) {
+//       return new Response(
+//         JSON.stringify({
+//           success: false,
+//           error: `Origin not allowed: ${origin}`,
+//         }),
+//         {
+//           status: 403,
+//           headers: { ...corsHeaders, "Content-Type": "application/json" },
+//         }
+//       );
+//     }
 
-//     // Get Twilio credentials from settings
+//     // Supabase env
+//     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+//     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+//     if (!supabaseUrl || !serviceRoleKey) {
+//       throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY in Edge Function env");
+//     }
+
+//     const supabaseClient = createClient(supabaseUrl, serviceRoleKey);
+
+//     // Get Twilio credentials from settings table
 //     const { data: settings, error: settingsError } = await supabaseClient
 //       .from("settings")
 //       .select("key, value")
@@ -39,8 +82,8 @@
 //       throw new Error("Failed to fetch Twilio settings");
 //     }
 
-//     const settingsMap = settings.reduce((acc, { key, value }) => {
-//       acc[key] = value;
+//     const settingsMap = settings.reduce((acc, row) => {
+//       acc[row.key as string] = row.value as string;
 //       return acc;
 //     }, {} as Record<string, string>);
 
@@ -52,18 +95,18 @@
 //       throw new Error("Twilio credentials not configured");
 //     }
 
+//     // Parse request body
 //     const body: SendSmsRequest = await req.json();
 //     const { customerIds, phoneNumbers, messageBody, pointsThreshold } = body;
 
-//     if (!messageBody) {
+//     if (!messageBody || typeof messageBody !== "string") {
 //       throw new Error("Message body is required");
 //     }
 
-//     // Get customers to send messages to
+//     // Query customers based on criteria
 //     let customers: any[] = [];
 
-//     if (customerIds && customerIds.length > 0) {
-//       // Send to specific customer IDs
+//     if (customerIds?.length) {
 //       const { data, error } = await supabaseClient
 //         .from("customers")
 //         .select("id, phone, first_name, points, opted_out")
@@ -71,9 +114,8 @@
 //         .eq("opted_out", false);
 
 //       if (error) throw error;
-//       customers = data || [];
-//     } else if (phoneNumbers && phoneNumbers.length > 0) {
-//       // Send to specific phone numbers
+//       customers = data ?? [];
+//     } else if (phoneNumbers?.length) {
 //       const { data, error } = await supabaseClient
 //         .from("customers")
 //         .select("id, phone, first_name, points, opted_out")
@@ -81,9 +123,8 @@
 //         .eq("opted_out", false);
 
 //       if (error) throw error;
-//       customers = data || [];
+//       customers = data ?? [];
 //     } else if (pointsThreshold !== undefined) {
-//       // Send to customers with points >= threshold
 //       const { data, error } = await supabaseClient
 //         .from("customers")
 //         .select("id, phone, first_name, points, opted_out")
@@ -91,20 +132,21 @@
 //         .eq("opted_out", false);
 
 //       if (error) throw error;
-//       customers = data || [];
+//       customers = data ?? [];
 //     } else {
 //       throw new Error("Must provide customerIds, phoneNumbers, or pointsThreshold");
 //     }
 
-//     const results = [];
-//     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Messages.json`;
+//     const results: Array<{ phone: string; status: string; error?: string }> = [];
+
+//     const twilioUrl =
+//       `https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Messages.json`;
 //     const authHeader = `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`;
 
-//     // Send messages with rate limiting (1 message per 100ms)
 //     for (const customer of customers) {
 //       const personalizedMessage = messageBody
-//         .replace(/\{name\}/g, customer.first_name)
-//         .replace(/\{points\}/g, customer.points.toString());
+//         .replace(/\{name\}/g, String(customer.first_name ?? ""))
+//         .replace(/\{points\}/g, String(customer.points ?? ""));
 
 //       const messageRecord: any = {
 //         customer_id: customer.id,
@@ -114,13 +156,12 @@
 //       };
 
 //       try {
-//         // Send SMS via Twilio
 //         const formData = new URLSearchParams();
 //         formData.append("To", customer.phone);
 //         formData.append("From", twilioPhoneNumber);
 //         formData.append("Body", personalizedMessage);
 
-//         const response = await fetch(twilioUrl, {
+//         const resp = await fetch(twilioUrl, {
 //           method: "POST",
 //           headers: {
 //             "Authorization": authHeader,
@@ -129,29 +170,30 @@
 //           body: formData.toString(),
 //         });
 
-//         if (response.ok) {
-//           const twilioResponse = await response.json();
+//         if (resp.ok) {
+//           const twilioResp = await resp.json();
 //           messageRecord.status = "sent";
-//           messageRecord.twilio_sid = twilioResponse.sid;
+//           messageRecord.twilio_sid = twilioResp.sid;
 //           messageRecord.sent_at = new Date().toISOString();
 //           results.push({ phone: customer.phone, status: "sent" });
 //         } else {
-//           const errorData = await response.text();
+//           const errorText = await resp.text();
 //           messageRecord.status = "failed";
-//           messageRecord.error_message = errorData;
-//           results.push({ phone: customer.phone, status: "failed", error: errorData });
+//           messageRecord.error_message = errorText;
+//           results.push({ phone: customer.phone, status: "failed", error: errorText });
 //         }
-//       } catch (error: any) {
+//       } catch (err: any) {
+//         const msg = err?.message ?? String(err);
 //         messageRecord.status = "failed";
-//         messageRecord.error_message = error.message;
-//         results.push({ phone: customer.phone, status: "failed", error: error.message });
+//         messageRecord.error_message = msg;
+//         results.push({ phone: customer.phone, status: "failed", error: msg });
 //       }
 
-//       // Save message record
+//       // Save message record (don’t crash if insert fails)
 //       await supabaseClient.from("messages").insert(messageRecord);
 
-//       // Rate limiting: wait 100ms between messages
-//       await new Promise((resolve) => setTimeout(resolve, 100));
+//       // Rate limit: 100ms between messages
+//       await new Promise((r) => setTimeout(r, 100));
 //     }
 
 //     return new Response(
@@ -161,30 +203,17 @@
 //         results,
 //       }),
 //       {
-//         headers: {
-//           ...corsHeaders,
-//           "Content-Type": "application/json",
-//         },
+//         status: 200,
+//         headers: { ...corsHeaders, "Content-Type": "application/json" },
 //       }
 //     );
-//   } catch (error: any) {
-//     return new Response(
-//       JSON.stringify({
-//         success: false,
-//         error: error.message,
-//       }),
-//       {
-//         status: 400,
-//         headers: {
-//           ...corsHeaders,
-//           "Content-Type": "application/json",
-//         },
-//       }
-//     );
+//   } catch (err: any) {
+//     return new Response(JSON.stringify({ success: false, error: err?.message ?? String(err) }), {
+//       status: 400,
+//       headers: { ...getCorsHeaders(req), "Content-Type": "application/json" },
+//     });
 //   }
 // });
-
-/// /// <reference lib="deno.ns" />
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -204,7 +233,6 @@ function getCorsHeaders(req: Request): Record<string, string> {
     "Access-Control-Allow-Origin": allowOrigin,
     "Vary": "Origin",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    // ✅ This is the standard Supabase header allowlist
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
     "Access-Control-Max-Age": "86400",
   };
@@ -217,15 +245,69 @@ interface SendSmsRequest {
   pointsThreshold?: number;
 }
 
+// ---- helpers ----
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Supabase/PostgREST will put `.in(...)` values in the URL query string.
+ * Large lists -> huge URL -> "TypeError: Invalid URL".
+ * Chunking prevents URL blowups.
+ */
+const IN_CLAUSE_CHUNK_SIZE = 200;
+
+async function fetchCustomersByIds(
+  supabaseClient: ReturnType<typeof createClient>,
+  ids: string[]
+) {
+  const batches = chunk(ids, IN_CLAUSE_CHUNK_SIZE);
+  const all: any[] = [];
+
+  for (const batch of batches) {
+    const { data, error } = await supabaseClient
+      .from("customers")
+      .select("id, phone, first_name, points, opted_out")
+      .in("id", batch)
+      .eq("opted_out", false);
+
+    if (error) throw error;
+    if (data?.length) all.push(...data);
+  }
+
+  return all;
+}
+
+async function fetchCustomersByPhones(
+  supabaseClient: ReturnType<typeof createClient>,
+  phones: string[]
+) {
+  const batches = chunk(phones, IN_CLAUSE_CHUNK_SIZE);
+  const all: any[] = [];
+
+  for (const batch of batches) {
+    const { data, error } = await supabaseClient
+      .from("customers")
+      .select("id, phone, first_name, points, opted_out")
+      .in("phone", batch)
+      .eq("opted_out", false);
+
+    if (error) throw error;
+    if (data?.length) all.push(...data);
+  }
+
+  return all;
+}
+
 serve(async (req: Request) => {
   const corsHeaders = getCorsHeaders(req);
 
-  // ✅ Always handle preflight first
   if (req.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
   }
 
-  // Only allow POST for actual call
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ success: false, error: "Method not allowed" }), {
       status: 405,
@@ -234,18 +316,11 @@ serve(async (req: Request) => {
   }
 
   try {
-    // Optional: if origin isn't allowed, return a clean error (still with CORS headers)
     const origin = req.headers.get("origin") ?? "";
     if (!ALLOWED_ORIGINS.has(origin)) {
       return new Response(
-        JSON.stringify({
-          success: false,
-          error: `Origin not allowed: ${origin}`,
-        }),
-        {
-          status: 403,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+        JSON.stringify({ success: false, error: `Origin not allowed: ${origin}` }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
@@ -258,7 +333,7 @@ serve(async (req: Request) => {
 
     const supabaseClient = createClient(supabaseUrl, serviceRoleKey);
 
-    // Get Twilio credentials from settings table
+    // Twilio settings
     const { data: settings, error: settingsError } = await supabaseClient
       .from("settings")
       .select("key, value")
@@ -293,23 +368,9 @@ serve(async (req: Request) => {
     let customers: any[] = [];
 
     if (customerIds?.length) {
-      const { data, error } = await supabaseClient
-        .from("customers")
-        .select("id, phone, first_name, points, opted_out")
-        .in("id", customerIds)
-        .eq("opted_out", false);
-
-      if (error) throw error;
-      customers = data ?? [];
+      customers = await fetchCustomersByIds(supabaseClient, customerIds);
     } else if (phoneNumbers?.length) {
-      const { data, error } = await supabaseClient
-        .from("customers")
-        .select("id, phone, first_name, points, opted_out")
-        .in("phone", phoneNumbers)
-        .eq("opted_out", false);
-
-      if (error) throw error;
-      customers = data ?? [];
+      customers = await fetchCustomersByPhones(supabaseClient, phoneNumbers);
     } else if (pointsThreshold !== undefined) {
       const { data, error } = await supabaseClient
         .from("customers")
