@@ -190,12 +190,12 @@ interface CustomerListProps {
   refreshTrigger: number;
 }
 
-type PointsRangeKey = '' | '250_499' | '500_749' | '750_1249' | '2000_plus';
+type PointsRangeKey = '' | '250_299' | '500_749' | '300_499' | '2000_plus';
 
 const POINTS_RANGES: Record<Exclude<PointsRangeKey, ''>, { min: number; max?: number; label: string }> = {
-  '250_499': { min: 250, max: 499, label: '250–499 Points' },
+  '250_299': { min: 250, max: 299, label: '250–299 Points' },
   '500_749': { min: 500, max: 749, label: '500–749 Points' },
-  '750_1249': { min: 750, max: 1249, label: '750–1249 Points' },
+  '300_499': { min: 300, max: 499, label: '300–499 Points' },
   '2000_plus': { min: 2000, label: '2000+ Points' },
 };
 
@@ -402,9 +402,9 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
             className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
           >
             <option value="">All Points</option>
-            <option value="250_499">250–499 Points</option>
+            <option value="250_299">250–299 Points</option>
             <option value="500_749">500–749 Points</option>
-            <option value="750_1249">750–1249 Points</option>
+            <option value="300_499">300–499 Points</option>
             <option value="2000_plus">2000+ Point</option>
           </select>
         </div>
