@@ -517,4 +517,4 @@ export function CustomerList({ onSelectionChange, refreshTrigger }: CustomerList
     </div>
   );
 }
-//nothing here now update customer lsitx  
+//nothing here now update customer lsitx   agiain error
