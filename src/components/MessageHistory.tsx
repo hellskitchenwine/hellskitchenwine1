@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { History, CheckCircle, XCircle, Clock, Calendar } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { Message } from '../types/database';
@@ -7,48 +7,74 @@ interface MessageHistoryProps {
   refreshTrigger: number;
 }
 
+type DateFilter = 'all' | 'today' | 'yesterday' | 'last7days' | 'last30days' | 'custom';
+
+// Parse YYYY-MM-DD safely as a *local* date (avoids UTC shifting)
+const parseLocalDateInput = (value: string) => {
+  const [y, m, d] = value.split('-').map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+};
+
+const startOfLocalDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+const endOfLocalDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+
 export function MessageHistory({ refreshTrigger }: MessageHistoryProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dateFilter, setDateFilter] = useState('all');
+
+  const [dateFilter, setDateFilter] = useState<DateFilter>('all');
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
 
-  useEffect(() => {
-    loadMessages();
-  }, [refreshTrigger, dateFilter, customStartDate, customEndDate]);
-
-  const getDateRange = () => {
+  // Returns {start, end} where end is optional. null = no filtering.
+  const getRange = () => {
     const now = new Date();
-    let startDate: Date | null = null;
 
     switch (dateFilter) {
-      case 'today':
-        startDate = new Date(now.setHours(0, 0, 0, 0));
-        break;
-      case 'yesterday':
-        const yesterday = new Date(now);
-        yesterday.setDate(yesterday.getDate() - 1);
-        startDate = new Date(yesterday.setHours(0, 0, 0, 0));
-        break;
-      case 'last7days':
-        startDate = new Date(now);
-        startDate.setDate(startDate.getDate() - 7);
-        break;
-      case 'last30days':
-        startDate = new Date(now);
-        startDate.setDate(startDate.getDate() - 30);
-        break;
-      case 'custom':
-        if (customStartDate) {
-          startDate = new Date(customStartDate);
-        }
-        break;
+      case 'all':
+        return null;
+
+      case 'today': {
+        const start = startOfLocalDay(now);
+        const end = endOfLocalDay(now);
+        return { start, end };
+      }
+
+      case 'yesterday': {
+        const y = new Date(now);
+        y.setDate(y.getDate() - 1);
+        const start = startOfLocalDay(y);
+        const end = endOfLocalDay(y);
+        return { start, end };
+      }
+
+      case 'last7days': {
+        const start = new Date(now);
+        start.setDate(start.getDate() - 7);
+        return { start, end: null as Date | null };
+      }
+
+      case 'last30days': {
+        const start = new Date(now);
+        start.setDate(start.getDate() - 30);
+        return { start, end: null as Date | null };
+      }
+
+      case 'custom': {
+        const s = customStartDate ? parseLocalDateInput(customStartDate) : null;
+        const e = customEndDate ? parseLocalDateInput(customEndDate) : null;
+
+        const start = s ? startOfLocalDay(s) : null;
+        const end = e ? endOfLocalDay(e) : null;
+
+        if (!start && !end) return null; // nothing selected
+        return { start, end };
+      }
+
       default:
         return null;
     }
-
-    return startDate;
   };
 
   const loadMessages = async () => {
@@ -56,41 +82,53 @@ export function MessageHistory({ refreshTrigger }: MessageHistoryProps) {
     try {
       let query = supabase
         .from('messages')
-        .select('*')
-        .order('created_at', { ascending: false });
+        .select('*', { count: 'exact' })
+        .order('created_at', { ascending: false })
+        .limit(200);
 
-      const startDate = getDateRange();
+      const range = getRange();
 
-      if (dateFilter === 'custom' && customStartDate && customEndDate) {
-        const start = new Date(customStartDate).toISOString();
-        const end = new Date(customEndDate);
-        end.setHours(23, 59, 59, 999);
-        query = query.gte('created_at', start).lte('created_at', end.toISOString());
-      } else if (startDate) {
-        query = query.gte('created_at', startDate.toISOString());
-      }
+      if (range?.start) query = query.gte('created_at', range.start.toISOString());
+      if (range?.end) query = query.lte('created_at', range.end.toISOString());
 
-      const { data, error } = await query;
+      const { data, error, count } = await query;
+
+      // ✅ Debug logs (keep until you see data, then you can remove)
+      console.log('[MessageHistory] count:', count);
+      console.log('[MessageHistory] error:', error);
+      console.log('[MessageHistory] first row:', data?.[0]);
 
       if (error) throw error;
-      setMessages(data || []);
-    } catch (error) {
-      console.error('Error loading messages:', error);
+
+      setMessages((data as Message[]) || []);
+    } catch (err) {
+      console.error('Error loading messages:', err);
+      setMessages([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const getMessageStats = () => {
-    const total = messages.length;
-    const sent = messages.filter(m => m.status === 'sent').length;
-    const failed = messages.filter(m => m.status === 'failed').length;
-    const pending = messages.filter(m => m.status === 'pending').length;
+  useEffect(() => {
+    loadMessages();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshTrigger, dateFilter, customStartDate, customEndDate]);
+
+  const stats = useMemo(() => {
+    let total = 0;
+    let sent = 0;
+    let failed = 0;
+    let pending = 0;
+
+    for (const m of messages) {
+      total += 1;
+      if (m.status === 'sent') sent += 1;
+      else if (m.status === 'failed') failed += 1;
+      else if (m.status === 'pending') pending += 1;
+    }
 
     return { total, sent, failed, pending };
-  };
-
-  const stats = getMessageStats();
+  }, [messages]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -118,7 +156,8 @@ export function MessageHistory({ refreshTrigger }: MessageHistoryProps) {
     }
   };
 
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString?: string | null) => {
+    if (!dateString) return '-';
     const date = new Date(dateString);
     return date.toLocaleString();
   };
@@ -157,7 +196,7 @@ export function MessageHistory({ refreshTrigger }: MessageHistoryProps) {
             <Calendar className="w-5 h-5 text-gray-400" />
             <select
               value={dateFilter}
-              onChange={(e) => setDateFilter(e.target.value)}
+              onChange={(e) => setDateFilter(e.target.value as DateFilter)}
               className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               <option value="all">All Time</option>
@@ -172,9 +211,7 @@ export function MessageHistory({ refreshTrigger }: MessageHistoryProps) {
           {dateFilter === 'custom' && (
             <div className="flex gap-4">
               <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Start Date
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
                 <input
                   type="date"
                   value={customStartDate}
@@ -183,9 +220,7 @@ export function MessageHistory({ refreshTrigger }: MessageHistoryProps) {
                 />
               </div>
               <div className="flex-1">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  End Date
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
                 <input
                   type="date"
                   value={customEndDate}
@@ -202,7 +237,13 @@ export function MessageHistory({ refreshTrigger }: MessageHistoryProps) {
         {loading ? (
           <div className="p-8 text-center text-gray-500">Loading history...</div>
         ) : messages.length === 0 ? (
-          <div className="p-8 text-center text-gray-500">No messages sent yet</div>
+          <div className="p-8 text-center text-gray-500">
+            No messages found.
+            <div className="text-xs text-gray-400 mt-2">
+              Open DevTools Console and check the logs: count/error/first row.
+              If error mentions RLS or permission, you need a SELECT policy on the messages table.
+            </div>
+          </div>
         ) : (
           <table className="w-full">
             <thead className="bg-gray-50">
@@ -236,19 +277,20 @@ export function MessageHistory({ refreshTrigger }: MessageHistoryProps) {
                       </span>
                     </div>
                   </td>
+
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     {message.phone}
                   </td>
+
                   <td className="px-6 py-4">
                     <div className="text-sm text-gray-900 max-w-md truncate">
                       {message.message_body}
                     </div>
                     {message.error_message && (
-                      <div className="text-xs text-red-600 mt-1">
-                        {message.error_message}
-                      </div>
+                      <div className="text-xs text-red-600 mt-1">{message.error_message}</div>
                     )}
                   </td>
+
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {formatDate(message.sent_at || message.created_at)}
                   </td>
