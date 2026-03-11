@@ -1,4 +1,3 @@
-// /// /// <reference lib="deno.ns" />
 // import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 // import { createClient } from "npm:@supabase/supabase-js@2";
 // import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
@@ -18,7 +17,6 @@
 //     "Access-Control-Allow-Origin": allowOrigin,
 //     "Vary": "Origin",
 //     "Access-Control-Allow-Methods": "POST, OPTIONS",
-//     // ✅ This is the standard Supabase header allowlist
 //     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 //     "Access-Control-Max-Age": "86400",
 //   };
@@ -31,15 +29,69 @@
 //   pointsThreshold?: number;
 // }
 
+// // ---- helpers ----
+// function chunk<T>(arr: T[], size: number): T[][] {
+//   const out: T[][] = [];
+//   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+//   return out;
+// }
+
+// /**
+//  * Supabase/PostgREST will put `.in(...)` values in the URL query string.
+//  * Large lists -> huge URL -> "TypeError: Invalid URL".
+//  * Chunking prevents URL blowups.
+//  */
+// const IN_CLAUSE_CHUNK_SIZE = 200;
+
+// async function fetchCustomersByIds(
+//   supabaseClient: ReturnType<typeof createClient>,
+//   ids: string[]
+// ) {
+//   const batches = chunk(ids, IN_CLAUSE_CHUNK_SIZE);
+//   const all: any[] = [];
+
+//   for (const batch of batches) {
+//     const { data, error } = await supabaseClient
+//       .from("customers")
+//       .select("id, phone, first_name, points, opted_out")
+//       .in("id", batch)
+//       .eq("opted_out", false);
+
+//     if (error) throw error;
+//     if (data?.length) all.push(...data);
+//   }
+
+//   return all;
+// }
+
+// async function fetchCustomersByPhones(
+//   supabaseClient: ReturnType<typeof createClient>,
+//   phones: string[]
+// ) {
+//   const batches = chunk(phones, IN_CLAUSE_CHUNK_SIZE);
+//   const all: any[] = [];
+
+//   for (const batch of batches) {
+//     const { data, error } = await supabaseClient
+//       .from("customers")
+//       .select("id, phone, first_name, points, opted_out")
+//       .in("phone", batch)
+//       .eq("opted_out", false);
+
+//     if (error) throw error;
+//     if (data?.length) all.push(...data);
+//   }
+
+//   return all;
+// }
+
 // serve(async (req: Request) => {
 //   const corsHeaders = getCorsHeaders(req);
 
-//   // ✅ Always handle preflight first
 //   if (req.method === "OPTIONS") {
 //     return new Response(null, { status: 204, headers: corsHeaders });
 //   }
 
-//   // Only allow POST for actual call
 //   if (req.method !== "POST") {
 //     return new Response(JSON.stringify({ success: false, error: "Method not allowed" }), {
 //       status: 405,
@@ -48,18 +100,11 @@
 //   }
 
 //   try {
-//     // Optional: if origin isn't allowed, return a clean error (still with CORS headers)
 //     const origin = req.headers.get("origin") ?? "";
 //     if (!ALLOWED_ORIGINS.has(origin)) {
 //       return new Response(
-//         JSON.stringify({
-//           success: false,
-//           error: `Origin not allowed: ${origin}`,
-//         }),
-//         {
-//           status: 403,
-//           headers: { ...corsHeaders, "Content-Type": "application/json" },
-//         }
+//         JSON.stringify({ success: false, error: `Origin not allowed: ${origin}` }),
+//         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
 //       );
 //     }
 
@@ -72,7 +117,7 @@
 
 //     const supabaseClient = createClient(supabaseUrl, serviceRoleKey);
 
-//     // Get Twilio credentials from settings table
+//     // Twilio settings
 //     const { data: settings, error: settingsError } = await supabaseClient
 //       .from("settings")
 //       .select("key, value")
@@ -86,6 +131,7 @@
 //       acc[row.key as string] = row.value as string;
 //       return acc;
 //     }, {} as Record<string, string>);
+//     //referrence here to avoid truncation
 
 //     const twilioAccountSid = settingsMap.twilio_account_sid;
 //     const twilioAuthToken = settingsMap.twilio_auth_token;
@@ -107,23 +153,9 @@
 //     let customers: any[] = [];
 
 //     if (customerIds?.length) {
-//       const { data, error } = await supabaseClient
-//         .from("customers")
-//         .select("id, phone, first_name, points, opted_out")
-//         .in("id", customerIds)
-//         .eq("opted_out", false);
-
-//       if (error) throw error;
-//       customers = data ?? [];
+//       customers = await fetchCustomersByIds(supabaseClient, customerIds);
 //     } else if (phoneNumbers?.length) {
-//       const { data, error } = await supabaseClient
-//         .from("customers")
-//         .select("id, phone, first_name, points, opted_out")
-//         .in("phone", phoneNumbers)
-//         .eq("opted_out", false);
-
-//       if (error) throw error;
-//       customers = data ?? [];
+//       customers = await fetchCustomersByPhones(supabaseClient, phoneNumbers);
 //     } else if (pointsThreshold !== undefined) {
 //       const { data, error } = await supabaseClient
 //         .from("customers")
@@ -243,6 +275,7 @@ interface SendSmsRequest {
   phoneNumbers?: string[];
   messageBody: string;
   pointsThreshold?: number;
+  mediaUrl?: string | null;
 }
 
 // ---- helpers ----
@@ -324,7 +357,6 @@ serve(async (req: Request) => {
       );
     }
 
-    // Supabase env
     const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
     if (!supabaseUrl || !serviceRoleKey) {
@@ -333,7 +365,6 @@ serve(async (req: Request) => {
 
     const supabaseClient = createClient(supabaseUrl, serviceRoleKey);
 
-    // Twilio settings
     const { data: settings, error: settingsError } = await supabaseClient
       .from("settings")
       .select("key, value")
@@ -347,7 +378,6 @@ serve(async (req: Request) => {
       acc[row.key as string] = row.value as string;
       return acc;
     }, {} as Record<string, string>);
-    //referrence here to avoid truncation
 
     const twilioAccountSid = settingsMap.twilio_account_sid;
     const twilioAuthToken = settingsMap.twilio_auth_token;
@@ -357,15 +387,24 @@ serve(async (req: Request) => {
       throw new Error("Twilio credentials not configured");
     }
 
-    // Parse request body
     const body: SendSmsRequest = await req.json();
-    const { customerIds, phoneNumbers, messageBody, pointsThreshold } = body;
+    const { customerIds, phoneNumbers, messageBody, pointsThreshold, mediaUrl } = body;
 
     if (!messageBody || typeof messageBody !== "string") {
       throw new Error("Message body is required");
     }
 
-    // Query customers based on criteria
+    if (mediaUrl !== undefined && mediaUrl !== null) {
+      try {
+        const parsed = new URL(mediaUrl);
+        if (parsed.protocol !== "https:") {
+          throw new Error("Media URL must use HTTPS");
+        }
+      } catch {
+        throw new Error("Invalid media URL");
+      }
+    }
+
     let customers: any[] = [];
 
     if (customerIds?.length) {
@@ -400,6 +439,7 @@ serve(async (req: Request) => {
         customer_id: customer.id,
         phone: customer.phone,
         message_body: personalizedMessage,
+        media_url: mediaUrl ?? null,
         status: "pending",
       };
 
@@ -408,6 +448,10 @@ serve(async (req: Request) => {
         formData.append("To", customer.phone);
         formData.append("From", twilioPhoneNumber);
         formData.append("Body", personalizedMessage);
+
+        if (mediaUrl) {
+          formData.append("MediaUrl", mediaUrl);
+        }
 
         const resp = await fetch(twilioUrl, {
           method: "POST",
@@ -437,10 +481,7 @@ serve(async (req: Request) => {
         results.push({ phone: customer.phone, status: "failed", error: msg });
       }
 
-      // Save message record (don’t crash if insert fails)
       await supabaseClient.from("messages").insert(messageRecord);
-
-      // Rate limit: 100ms between messages
       await new Promise((r) => setTimeout(r, 100));
     }
 
