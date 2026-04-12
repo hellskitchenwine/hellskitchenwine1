@@ -220,12 +220,12 @@ export function ImportCustomers({ onImportComplete }: { onImportComplete: () => 
         // progress update (after batch is prepared)
         setProgress({ current: Math.min(i + batch.length, customers.length), total: customers.length });
 
-        // 1) Fetch existing points for all phones in the batch
+        // 1) Fetch existing data for all phones in the batch
         const phones = batch.map((c) => c.phone);
 
         const { data: existingRows, error: existingErr } = await supabase
           .from('customers')
-          .select('phone, points')
+          .select('id, phone, points, total_redemptions')
           .in('phone', phones);
 
         if (existingErr) {
@@ -234,24 +234,30 @@ export function ImportCustomers({ onImportComplete }: { onImportComplete: () => 
           continue;
         }
 
-        const existingMap = new Map<string, number>();
-        (existingRows || []).forEach((r: any) => existingMap.set(r.phone, r.points ?? 0));
+        const existingMap = new Map<string, { id: string; points: number; total_redemptions: number }>();
+        (existingRows || []).forEach((r: any) =>
+          existingMap.set(r.phone, {
+            id: r.id,
+            points: r.points ?? 0,
+            total_redemptions: r.total_redemptions ?? 0,
+          })
+        );
 
         // 2) Build upsert payload
         const nowIso = new Date().toISOString();
 
         const upsertRows = batch.map((c) => {
-          const previousPoints = existingMap.get(c.phone) ?? 0;
-          const newPoints = c.points;
-
-          const recentlyRedeemed = previousPoints >= 500 && newPoints < 500;
+          const existing = existingMap.get(c.phone);
+          const previousPoints = existing?.points ?? 0;
+          const recentlyRedeemed = previousPoints >= 500 && c.points < 500;
 
           return {
             phone: c.phone,
             first_name: c.first_name,
-            points: newPoints,
+            points: c.points,
             previous_points: previousPoints,
             recently_redeemed: recentlyRedeemed,
+            total_redemptions: (existing?.total_redemptions ?? 0) + (recentlyRedeemed ? 1 : 0),
             updated_at: nowIso,
           };
         });
@@ -264,8 +270,34 @@ export function ImportCustomers({ onImportComplete }: { onImportComplete: () => 
         if (upsertErr) {
           console.error('Batch upsert error:', upsertErr);
           errorCount += batch.length;
-        } else {
-          successCount += batch.length;
+          continue;
+        }
+
+        successCount += batch.length;
+
+        // 4) Log redemption_history rows for customers whose points just dropped 500 → below
+        const redemptionRows = batch
+          .filter((c) => {
+            const existing = existingMap.get(c.phone);
+            return existing && existing.points >= 500 && c.points < 500;
+          })
+          .map((c) => {
+            const existing = existingMap.get(c.phone)!;
+            return {
+              customer_id: existing.id,
+              phone: c.phone,
+              first_name: c.first_name,
+              points_before: existing.points,
+              points_after: c.points,
+              detected_at: nowIso,
+            };
+          });
+
+        if (redemptionRows.length > 0) {
+          const { error: rErr } = await supabase
+            .from('redemption_history')
+            .insert(redemptionRows);
+          if (rErr) console.error('Error inserting redemption history:', rErr);
         }
       }
 

@@ -350,9 +350,10 @@
 //   );
 // }
 import { useState, useEffect } from 'react';
-import { Send, AlertCircle, CheckCircle, Eye, Clock, Image as ImageIcon } from 'lucide-react';
+import { Send, AlertCircle, CheckCircle, Eye, Clock, Image as ImageIcon, BarChart2 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { checkNYSMSCompliance, getNextAllowedTime, formatCurrentETTime } from '../utils/smsCompliance';
+import { Campaign } from '../types/database';
 
 interface SendMessageProps {
   selectedCustomerIds: string[];
@@ -365,10 +366,23 @@ const DEFAULT_MESSAGES = {
   'custom': ''
 };
 
+const BATCH_SIZE = 50; // safe limit per edge-function call (~15-25s, well under 60s timeout)
+
+interface SendProgress {
+  currentBatch: number;
+  totalBatches: number;
+  sent: number;
+  failed: number;
+  total: number;
+}
+
 export function SendMessage({ selectedCustomerIds, onSendComplete }: SendMessageProps) {
   const [message, setMessage] = useState('');
   const [mediaUrl, setMediaUrl] = useState('');
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string>('');
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [sending, setSending] = useState(false);
+  const [progress, setProgress] = useState<SendProgress | null>(null);
   const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
   const [showConfirmation, setShowConfirmation] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
@@ -390,6 +404,14 @@ export function SendMessage({ selectedCustomerIds, onSendComplete }: SendMessage
     }, 1000);
 
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    supabase
+      .from('campaigns')
+      .select('id, name, reason, created_at')
+      .order('created_at', { ascending: false })
+      .then(({ data }) => setCampaigns((data as Campaign[]) || []));
   }, []);
 
   const isValidMediaUrl = (url: string) => {
@@ -461,48 +483,88 @@ export function SendMessage({ selectedCustomerIds, onSendComplete }: SendMessage
     setShowConfirmation(false);
     setSending(true);
     setResult(null);
+    setProgress(null);
 
-    try {
-      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-sms`;
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          customerIds: selectedCustomerIds,
-          messageBody: message,
-          mediaUrl: mediaUrl.trim() || null,
-        }),
+    // Split IDs into batches of BATCH_SIZE to stay well under the 60s edge function timeout
+    const batches: string[][] = [];
+    for (let i = 0; i < selectedCustomerIds.length; i += BATCH_SIZE) {
+      batches.push(selectedCustomerIds.slice(i, i + BATCH_SIZE));
+    }
+
+    const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-sms`;
+    const headers = {
+      'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
+      'Content-Type': 'application/json',
+    };
+
+    let totalSent = 0;
+    let totalFailed = 0;
+    let batchError: string | null = null;
+
+    for (let i = 0; i < batches.length; i++) {
+      setProgress({
+        currentBatch: i + 1,
+        totalBatches: batches.length,
+        sent: totalSent,
+        failed: totalFailed,
+        total: selectedCustomerIds.length,
       });
 
-      const data = await response.json();
+      try {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            customerIds: batches[i],
+            messageBody: message,
+            mediaUrl: mediaUrl.trim() || null,
+            campaignId: selectedCampaignId || null,
+          }),
+        });
 
-      if (data.success) {
-        setResult({
-          success: true,
-          message: mediaUrl.trim()
-            ? `MMS sent to ${data.totalCustomers} customers`
-            : `Messages sent to ${data.totalCustomers} customers`,
-        });
-        setMessage('');
-        setMediaUrl('');
-        onSendComplete();
-      } else {
-        setResult({
-          success: false,
-          message: data.error || 'Failed to send messages',
-        });
+        const data = await response.json();
+
+        if (data.success) {
+          const batchSent   = (data.results as any[]).filter(r => r.status === 'sent').length;
+          const batchFailed = (data.results as any[]).filter(r => r.status === 'failed').length;
+          totalSent   += batchSent;
+          totalFailed += batchFailed;
+        } else {
+          // Non-fatal: record the error, keep going with remaining batches
+          batchError = data.error || 'A batch failed';
+          totalFailed += batches[i].length;
+        }
+      } catch (err: any) {
+        batchError = err.message || 'Network error on a batch';
+        totalFailed += batches[i].length;
       }
-    } catch (error: any) {
+    }
+
+    // Final progress update
+    setProgress({
+      currentBatch: batches.length,
+      totalBatches: batches.length,
+      sent: totalSent,
+      failed: totalFailed,
+      total: selectedCustomerIds.length,
+    });
+
+    if (totalSent > 0 || totalFailed === 0) {
+      setResult({
+        success: true,
+        message: `Done — ${totalSent} sent${totalFailed > 0 ? `, ${totalFailed} failed` : ''}${batchError ? ` (some batches had errors)` : ''}`,
+      });
+      setMessage('');
+      setMediaUrl('');
+      onSendComplete();
+    } else {
       setResult({
         success: false,
-        message: error.message || 'Failed to send messages',
+        message: batchError || 'All messages failed to send',
       });
-    } finally {
-      setSending(false);
     }
+
+    setSending(false);
   };
 
   useEffect(() => {
@@ -590,10 +652,34 @@ export function SendMessage({ selectedCustomerIds, onSendComplete }: SendMessage
             {selectedCustomerIds.length} customer(s) selected
           </p>
         </div>
-        {selectedCustomerIds.length > 100 && (
-          <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-            <strong>Note:</strong> Sending to {selectedCustomerIds.length} customers will take approximately {Math.ceil(selectedCustomerIds.length / 10)} seconds due to rate limiting.
+        {selectedCustomerIds.length > 0 && (
+          <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+            Will send in <strong>{Math.ceil(selectedCustomerIds.length / BATCH_SIZE)} batch{Math.ceil(selectedCustomerIds.length / BATCH_SIZE) !== 1 ? 'es' : ''}</strong> of up to {BATCH_SIZE} — estimated ~{Math.ceil(selectedCustomerIds.length * 0.3)} seconds total.
           </div>
+        )}
+      </div>
+
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-1">
+          <BarChart2 className="w-4 h-4 text-purple-600" />
+          Link to Campaign <span className="text-gray-400 font-normal ml-1">(optional)</span>
+        </label>
+        <select
+          value={selectedCampaignId}
+          onChange={(e) => setSelectedCampaignId(e.target.value)}
+          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
+        >
+          <option value="">— No Campaign —</option>
+          {campaigns.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}{c.reason ? ` — ${c.reason}` : ''}
+            </option>
+          ))}
+        </select>
+        {campaigns.length === 0 && (
+          <p className="text-xs text-gray-400 mt-1">
+            No campaigns yet. Create one on the Campaigns tab first.
+          </p>
         )}
       </div>
 
@@ -616,7 +702,36 @@ export function SendMessage({ selectedCustomerIds, onSendComplete }: SendMessage
         </p>
       </div>
 
-      {result && (
+      {/* Live progress bar — shown while sending */}
+      {sending && progress && (
+        <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex justify-between items-center mb-2">
+            <span className="text-sm font-medium text-blue-900">
+              Sending batch {progress.currentBatch} of {progress.totalBatches}…
+            </span>
+            <span className="text-xs text-blue-700">
+              {progress.sent + progress.failed} / {progress.total}
+            </span>
+          </div>
+          <div className="w-full bg-blue-200 rounded-full h-2.5 mb-3">
+            <div
+              className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+              style={{ width: `${Math.round(((progress.sent + progress.failed) / progress.total) * 100)}%` }}
+            />
+          </div>
+          <div className="flex gap-4 text-xs">
+            <span className="text-green-700 font-medium">✓ {progress.sent} sent</span>
+            {progress.failed > 0 && (
+              <span className="text-red-600 font-medium">✗ {progress.failed} failed</span>
+            )}
+            <span className="text-gray-500">
+              {progress.total - progress.sent - progress.failed} remaining
+            </span>
+          </div>
+        </div>
+      )}
+
+      {result && !sending && (
         <div
           className={`flex items-start gap-2 p-3 mb-4 rounded-lg border ${
             result.success
@@ -630,16 +745,10 @@ export function SendMessage({ selectedCustomerIds, onSendComplete }: SendMessage
             <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
           )}
           <div className="text-sm">
-            <p
-              className={`font-medium ${
-                result.success ? 'text-green-900' : 'text-red-900'
-              }`}
-            >
-              {result.success ? 'Success' : 'Error'}
+            <p className={`font-medium ${result.success ? 'text-green-900' : 'text-red-900'}`}>
+              {result.success ? 'Done' : 'Error'}
             </p>
-            <p
-              className={result.success ? 'text-green-700' : 'text-red-700'}
-            >
+            <p className={result.success ? 'text-green-700' : 'text-red-700'}>
               {result.message}
             </p>
           </div>
@@ -677,6 +786,21 @@ export function SendMessage({ selectedCustomerIds, onSendComplete }: SendMessage
               <p className="text-gray-700 mb-4">
                 You are about to send {mediaUrl.trim() ? 'MMS' : 'SMS'} messages to <span className="font-bold text-blue-600">{selectedCustomerIds.length}</span> customer(s).
               </p>
+              {selectedCampaignId && (() => {
+                const camp = campaigns.find(c => c.id === selectedCampaignId);
+                return camp ? (
+                  <div className="mb-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                    <p className="text-sm text-purple-800">
+                      <strong>Campaign:</strong> {camp.name}
+                    </p>
+                    {camp.reason && (
+                      <p className="text-sm text-purple-700 mt-1">
+                        <strong>Reason:</strong> {camp.reason}
+                      </p>
+                    )}
+                  </div>
+                ) : null;
+              })()}
               {mediaUrl.trim() && (
                 <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
                   <p className="text-sm text-blue-800 break-all">

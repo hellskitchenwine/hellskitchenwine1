@@ -250,6 +250,22 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
+// Twilio error codes that mean the number is invalid / can never receive SMS.
+// When we see these we auto-opt-out the customer so they're never targeted again.
+const INVALID_NUMBER_CODES = new Set([
+  21211, // Invalid 'To' phone number
+  21214, // 'To' phone number cannot receive SMS messages
+  21217, // Phone number does not appear to be valid
+  21401, // Invalid phone number
+  21407, // Phone number can only receive calls, not SMS
+  21610, // Attempt to send to unsubscribed recipient (replied STOP via another channel)
+  30003, // Unreachable destination handset
+  30004, // Message blocked by carrier
+  30005, // Unknown destination handset (number deactivated)
+  30006, // Landline or unreachable carrier — cannot receive SMS
+  32204, // Invalid To number
+]);
+
 // ✅ Set your allowed origins here
 const ALLOWED_ORIGINS = new Set<string>([
   "https://hellskitchenwine-571619613032.us-central1.run.app",
@@ -276,6 +292,7 @@ interface SendSmsRequest {
   messageBody: string;
   pointsThreshold?: number;
   mediaUrl?: string | null;
+  campaignId?: string | null;
 }
 
 // ---- helpers ----
@@ -388,7 +405,7 @@ serve(async (req: Request) => {
     }
 
     const body: SendSmsRequest = await req.json();
-    const { customerIds, phoneNumbers, messageBody, pointsThreshold, mediaUrl } = body;
+    const { customerIds, phoneNumbers, messageBody, pointsThreshold, mediaUrl, campaignId } = body;
 
     if (!messageBody || typeof messageBody !== "string") {
       throw new Error("Message body is required");
@@ -426,9 +443,16 @@ serve(async (req: Request) => {
 
     const results: Array<{ phone: string; status: string; error?: string }> = [];
 
+    // SMS costs: $0.0079/SMS, $0.0200/MMS
+    const isMms = !!(mediaUrl);
+    const costPerMessage = isMms ? 0.0200 : 0.0079;
+
     const twilioUrl =
       `https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Messages.json`;
     const authHeader = `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`;
+
+    let sentCount = 0;
+    let failedCount = 0;
 
     for (const customer of customers) {
       const personalizedMessage = messageBody
@@ -441,6 +465,7 @@ serve(async (req: Request) => {
         message_body: personalizedMessage,
         media_url: mediaUrl ?? null,
         status: "pending",
+        campaign_id: campaignId,
       };
 
       try {
@@ -467,22 +492,69 @@ serve(async (req: Request) => {
           messageRecord.status = "sent";
           messageRecord.twilio_sid = twilioResp.sid;
           messageRecord.sent_at = new Date().toISOString();
+          messageRecord.cost = costPerMessage;
           results.push({ phone: customer.phone, status: "sent" });
+          sentCount++;
         } else {
-          const errorText = await resp.text();
+          // Parse Twilio error JSON to get the numeric code and a clean message
+          let twilioCode: number | null = null;
+          let cleanError = "";
+          try {
+            const errJson = await resp.json();
+            twilioCode = errJson.code ?? null;
+            cleanError = errJson.message
+              ? `[${errJson.code}] ${errJson.message}`
+              : JSON.stringify(errJson);
+          } catch {
+            cleanError = await resp.text();
+          }
+
           messageRecord.status = "failed";
-          messageRecord.error_message = errorText;
-          results.push({ phone: customer.phone, status: "failed", error: errorText });
+          messageRecord.error_message = cleanError;
+          results.push({ phone: customer.phone, status: "failed", error: cleanError });
+          failedCount++;
+
+          // Auto opt-out customers with permanently invalid/unreachable numbers
+          if (twilioCode && INVALID_NUMBER_CODES.has(twilioCode) && customer.id) {
+            await supabaseClient
+              .from("customers")
+              .update({ opted_out: true })
+              .eq("id", customer.id);
+          }
         }
       } catch (err: any) {
         const msg = err?.message ?? String(err);
         messageRecord.status = "failed";
         messageRecord.error_message = msg;
         results.push({ phone: customer.phone, status: "failed", error: msg });
+        failedCount++;
       }
 
       await supabaseClient.from("messages").insert(messageRecord);
       await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // Increment campaign totals after all sends
+    if (campaignId) {
+      const { data: current } = await supabaseClient
+        .from("campaigns")
+        .select("total_customers, total_sent, total_failed, total_cost")
+        .eq("id", campaignId)
+        .single();
+
+      if (current) {
+        await supabaseClient
+          .from("campaigns")
+          .update({
+            total_customers: current.total_customers + customers.length,
+            total_sent: current.total_sent + sentCount,
+            total_failed: current.total_failed + failedCount,
+            total_cost: parseFloat(
+              (Number(current.total_cost) + sentCount * costPerMessage).toFixed(2)
+            ),
+          })
+          .eq("id", campaignId);
+      }
     }
 
     return new Response(
@@ -490,6 +562,7 @@ serve(async (req: Request) => {
         success: true,
         totalCustomers: customers.length,
         results,
+        campaignId,
       }),
       {
         status: 200,

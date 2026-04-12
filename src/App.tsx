@@ -164,6 +164,7 @@ import {
   Database,
   FileText,
   LogOut,
+  BarChart2,
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { Login } from './components/Login';
@@ -174,8 +175,9 @@ import { MessageHistory } from './components/MessageHistory';
 import { Settings } from './components/Settings';
 import { AllCustomers } from './components/AllCustomers';
 import { TermsAndConditions } from './components/TermsAndConditions';
+import { Campaigns } from './components/Campaigns';
 
-type Tab = 'customers' | 'all-customers' | 'history' | 'settings' | 'terms';
+type Tab = 'customers' | 'all-customers' | 'history' | 'campaigns' | 'settings' | 'terms';
 
 function App() {
   const [session, setSession] = useState<Session | null>(null);
@@ -300,6 +302,17 @@ function App() {
               Message History
             </button>
             <button
+              onClick={() => setActiveTab('campaigns')}
+              className={`flex items-center gap-2 px-6 py-3 font-medium transition-colors border-b-2 ${
+                activeTab === 'campaigns'
+                  ? 'border-purple-600 text-purple-600'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <BarChart2 className="w-5 h-5" />
+              Campaigns
+            </button>
+            <button
               onClick={() => setActiveTab('settings')}
               className={`flex items-center gap-2 px-6 py-3 font-medium transition-colors border-b-2 ${
                 activeTab === 'settings'
@@ -351,6 +364,10 @@ function App() {
 
         {activeTab === 'history' && (
           <MessageHistory refreshTrigger={refreshTrigger} />
+        )}
+
+        {activeTab === 'campaigns' && (
+          <Campaigns refreshTrigger={refreshTrigger} />
         )}
 
         {activeTab === 'settings' && <Settings />}
